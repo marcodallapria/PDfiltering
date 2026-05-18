@@ -1,4 +1,4 @@
-# Reproducibility Materials for ``Exact inference via quasi-conjugacy in two-parameter Poisson--Dirichlet hidden Markov models''
+# Reproducibility materials for *Dalla Pria, Ruggiero, Spanò, “Exact inference via quasi-conjugacy in two-parameter Poisson–Dirichlet hidden Markov models”, JASA (forthcoming).*
 
 This directory contains the code, cached computational outputs, and supporting data needed to reproduce the numerical results in the manuscript and supplementary material.
 
