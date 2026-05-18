@@ -70,7 +70,7 @@ Users who want to reuse the software outside the manuscript workflows should sta
 
 ## Quick reproduction
 
-For a quick run that regenerates the manuscript figures from cached intermediate outputs whenever available, start an R session in the `Code` directory and run:
+For a quick run that regenerates the manuscript figures from cached intermediate outputs whenever available, start an R session in the repository root directory and run:
 
 ```r
 source("run_quick.R")
