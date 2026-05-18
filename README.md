@@ -86,6 +86,8 @@ This driver script:
 
 This is the recommended entry point for an external user who wants to verify the computational materials with minimal effort.
 
+**Note (large cached BPF output).** The cached CSV output for the bootstrap particle filter (BPF) in the Infectious analysis is not hosted in this GitHub repository due to file-size constraints. To reproduce the BPF panel/outputs, please re-run the corresponding chunk/script locally (expected runtime ≈ 1 hour), as documented in the notebooks/scripts.
+
 ## Full recomputation from raw data
 
 For a fuller run that renders the section notebooks as standalone documents, start an R session in the `Code` directory and run:
