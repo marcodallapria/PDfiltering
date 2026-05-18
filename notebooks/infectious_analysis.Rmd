@@ -1,0 +1,542 @@
+---
+title: "Infectious SocioPatterns analysis"
+output:
+  html_document:
+    df_print: paged
+---
+
+This notebook reproduces the empirical analysis of the Infectious SocioPatterns dataset used in the manuscript. It is a section-level, self-contained notebook: it contains the code and explanations for the empirical workflow, rather than acting only as a wrapper around an external script.
+
+```{r setup, include=FALSE}
+library(here)
+here::i_am("notebooks/infectious_analysis.Rmd")
+source(here("R", "pdhmm_setup.R"))
+check_required_packages()
+source(here("R", "pdhmm_reusable.R"))
+```
+
+# Infectious SocioPatterns dataset
+
+In this section we provide the code used to reproduce the analysis of the *Infectious* dataset.
+
+The dataset is publicly available from the SocioPatterns website:
+<https://sociopatterns.org/datasets/infectious-exhibition-dynamic-contact-networks/>
+
+The data are distributed under the **Creative Commons Attribution–NonCommercial–ShareAlike 3.0 Unported** license (**CC BY-NC-SA 3.0**). If you use these data for research or visualization purposes, please cite:
+
+> L. Isella et al., *“What’s in a crowd? Analysis of face-to-face behavioral networks”*, **Journal of Theoretical Biology** 271, 166 (2011).
+
+Please also acknowledge the **SocioPatterns** project and provide a link to:
+https://www.sociopatterns.org/
+
+The *Infectious* dataset contains **daily dynamic contact networks** collected during the SocioPatterns event hosted at the **Science Gallery (Dublin, Ireland)**, in the context of the art–science exhibition *INFECTIOUS: STAY AWAY*. The downloadable archive includes one file per day. Each file is a **tab-separated contact list** describing face-to-face proximity events recorded over **20-second intervals**.
+
+Each row has the form `t  i  j`, where `i` and `j` are **anonymous individual IDs** and `t` is the timestamp (in seconds, UNIX ctime). A row `t  i  j` indicates that individuals `i` and `j` were in contact during the interval **[t − 20s, t]**. If multiple contacts are active in the same 20-second interval, the file contains multiple rows sharing the same `t`.
+
+**Download instructions.** Please download the dataset archive from the SocioPatterns page above, extract it locally, and make sure that the file `listcontacts_2009_06_28.txt` is available (this is the specific day analyzed in our code). You may need to update the local file paths / working-directory references accordingly.
+
+The bundled file used here is:
+
+```{r, results='hide'}
+raw_data_path("listcontacts_2009_06_28.txt")
+```
+
+## Half-hour contact partitions for June 28, 2009
+
+The following chunks reproduce Figure 1 in the Introduction and Figure 10 in Section 4.5 of the main text.
+
+The chunk below loads the raw contact list for **June 28, 2009** and reconstructs **undirected contact networks** over consecutive time windows. Each record in the raw file corresponds to a detected face-to-face proximity event between two visitors; after sorting the endpoints (`from`, `to`) and parsing the timestamp, contacts are grouped by **hour** and then, whenever applicable, split into the two **half-hour** intervals within the same hour (minutes `< 30` and `>= 30`).
+
+For each resulting time window, an undirected graph is built from the list of contacts. We then compute the **connected components** of that graph and report their sizes (sorted in decreasing order). In other words, each printed line is a compact representation of the **partition of individuals into connected contact groups** within that half-hour: the numbers indicate the sizes of the connected groups present in that time window.
+
+For example:
+
+- `"10h <30m : 3, 2"` means that between **10:00 and 10:29**, the contact network decomposes into two connected groups of sizes **3** and **2** (all other individuals, if any, are isolated and do not appear because they are not involved in any recorded contact).
+- `"12h >=30m : 42, 2, 2"` means that between **12:30 and 12:59**, there is one large connected group of size **42** and two additional connected pairs (two components of size **2**).
+
+Finally, the sequence of plots visualizes these half-hour contact networks: **each panel corresponds to one time window**, and its title matches the label printed in the output (hour and half-hour). The visual structure of the graph mirrors the reported component sizes: disconnected clusters in the plot correspond to distinct connected components in the printed partition.
+
+```{r, fig.width=20, fig.height=7}
+day <- 28
+label <- raw_data_path(sprintf("listcontacts_2009_06_%02d.txt", day))
+listcontacts <- read.delim(label, header = FALSE)
+
+listcontacts.1 <- lapply(
+  1:nrow(listcontacts),
+  function(row) sort(as.numeric(listcontacts[row, c(2, 3)]), decreasing = FALSE)
+)
+listcontacts <- cbind(listcontacts[, 1], do.call(rbind, listcontacts.1))
+colnames(listcontacts) <- c("time", "from", "to")
+listcontacts <- as.data.frame(listcontacts)
+mode(listcontacts$from) <- "character"
+mode(listcontacts$to) <- "character"
+
+H <- sapply(listcontacts$time, function(el) hour(as_datetime(el)))
+M <- sapply(listcontacts$time, function(el) minute(as_datetime(el)))
+listcontacts$hour <- H
+listcontacts$minute <- M
+listcontacts <- listcontacts[, -1]
+
+test <- lapply(unique(listcontacts$hour), function(t) subset(listcontacts, hour == t))
+test <- lapply(
+  test,
+  function(t) {
+    if (t[1, 4] < 30 && t[nrow(t), 4] >= 30) {
+      list(subset(t, minute < 30), subset(t, minute >= 30))
+    } else {
+      list(t)
+    }
+  }
+)
+test <- unlist(test, recursive = FALSE)
+labels <- sapply(
+  test,
+  function(t) paste0(toString(t[1, 3]), "h ", if (t[1, 4] < 30) "\n<30m" else "\n>=30m")
+)
+test.1 <- lapply(test, function(el) unique(el[, c(1, 2)]))
+names(test.1) <- labels
+
+for (el in test.1) {
+  el$from <- as.character(el$from)
+  el$to <- as.character(el$to)
+}
+
+my_graphs <- lapply(
+  test.1,
+  function(el) if (nrow(el) > 1) graph_from_edgelist(as.matrix(el[, c(1, 2)]), directed = FALSE)
+)
+my_graphs <- my_graphs[!sapply(my_graphs, function(el) is.null(el))]
+
+Y_graphs <- lapply(my_graphs, function(g) sort(components(g)$csize, decreasing = TRUE))
+
+  for (i in 1:length(Y_graphs)) {
+    print(paste(names(Y_graphs)[i], ': ', toString(Y_graphs[[i]])))
+  }
+  
+  par(mfrow = c(2,6), mar = c(2,0,3.5,0))
+  c <- 0
+  for(graph in my_graphs) {
+    c <- c+1
+    plot.igraph(graph, vertex.size = 9, edge.width = 2, vertex.color = 'blue', vertex.frame.color = 'white', vertex.label = NA)
+    title(names(Y_graphs)[[c]], cex.main = 2)
+  }
+```
+
+```{r}
+for (i in 1:length(Y_graphs)) {
+  print(paste(names(Y_graphs)[i], ": ", toString(Y_graphs[[i]])))
+}
+```
+
+## Maximum likelihood estimation of $\alpha$ and $\theta$
+
+We now estimate the model parameters \(\alpha\) and \(\theta\) by **maximum likelihood**. As described in the main text, the likelihood of the observed sequence of contact-partition summaries (`Y_graphs`) is evaluated via the **dual particle filter**. Concretely, we compute (an estimate of) the **log-likelihood** on a grid of candidate values \((\alpha,\theta)\), and we return the pair \((\alpha,\theta)\) that maximizes it, together with the corresponding log-likelihood value.
+
+Because the filtering routine relies on an internal **Monte Carlo** step—namely, simulation of the dual process via a **Gillespie-type algorithm** (see the manuscript for details)—the resulting log-likelihood values (and hence the maximizing pair) may exhibit **small run-to-run variability** when the chunk is executed multiple times. Increasing the Monte Carlo budget (e.g., number of particles and/or simulated dual trajectories) reduces this variability at the cost of longer runtime.
+
+**Expected runtime:** approximately **6 minutes** on a standard laptop (may vary depending on hardware and settings).
+
+Replace with `if (TRUE)` to run the ML estimation of \(\alpha\) and \(\theta\).
+Otherwise go to the next chunk to set them manually.
+
+```{r MLE INFECTIOUS}
+if (FALSE) {
+  my_steps <- length(Y_graphs) - 1
+  my_T <- my_steps + 1
+  my_t <- 0.1
+  my_epsilon <- 0.005
+
+  min_alpha <- 0
+  max_alpha <- 0.05
+  min_theta <- 0.7
+  max_theta <- 0.9
+
+  grid_alpha <- seq(min_alpha, max_alpha, by = 0.01)
+  grid_theta <- seq(min_theta, max_theta, by = 0.05)
+  my_grid <- expand.grid(alpha = grid_alpha, theta = grid_theta)
+  my_grid <- my_grid[-1, ]
+
+  temp_graphs <- my_grid
+  temp_graphs$psf <- pbapply(
+    my_grid, 1,
+    function(el) {
+      sum(log(Particle_filter_likelihood(
+        Y_graphs,
+        alpha = el[1],
+        theta = el[2],
+        t = my_t,
+        pruning_update = 0,
+        pruning_propagation = 10,
+        N = 0,
+        nParticles = 10^4,
+        store_mixture = FALSE
+      )))
+    }
+  )
+
+  my_MLEs_graphs <- temp_graphs[which.max(temp_graphs$psf), ]
+  my_MLEs_graphs
+}
+```
+
+Set manually \(\alpha\) and \(\theta\).
+Replace with `if (FALSE)` if chunk above has been executed
+```{r}
+if (TRUE) {
+  my_steps <- length(Y_graphs) - 1
+  my_T <- my_steps + 1
+  my_t <- 0.1
+  my_epsilon <- 0.005
+  my_MLEs_graphs <- c(0, 0.75)
+}
+```
+
+## Dual filtering with ML-estimated parameters
+
+Having obtained the maximum-likelihood estimates of \(\alpha\) and \(\theta\), we can now run the dual particle filter to approximate the filtering distribution over time (as described in the main text). We summarize both the observations and the filter output in terms of **heterozygosity**, i.e. the \(q\)-entropy statistic with \(q=2\) (computed from the normalized component-size vectors at each time point).
+
+Concretely, the chunk below:
+- computes the observed heterozygosity time series from `Y_graphs`;
+- runs the dual filtering procedure at the ML parameter values;
+- stores Monte Carlo draws from the filtering distribution (used later for violin plots) and computes pointwise credibility bands (e.g. 2.5% and 97.5% quantiles).
+
+**Expected runtime:** typically under 2 minutes, depending on hardware and Monte Carlo settings.
+```{r DUAL FILTER INFECTIOUS, message=FALSE}
+MCrep <- 10^4
+MCparticles <- 10^5
+my_pruning_update <- 0
+my_pruning_propagation <- 10
+my_q <- 2
+
+entropy_graphs <- sapply(Y_graphs, function(el) qentropy(el / sum(el), q = my_q))
+entropy_graphs <- data.frame(
+  data = entropy_graphs,
+  type = as.factor("Observed entropy"),
+  time = as.factor(seq(from = 0, length.out = my_steps + 1, by = my_t))
+)
+
+my_filter_graphs <- Particle_filter_qentropy(
+  Y_graphs,
+  alpha = as.numeric(my_MLEs_graphs[1]),
+  theta = as.numeric(my_MLEs_graphs[2]),
+  t = my_t,
+  epsilon = my_epsilon,
+  pruning_update = 0,
+  pruning_propagation = 10,
+  N = MCrep,
+  nParticles = MCparticles,
+  show_top = Inf,
+  verbose = FALSE,
+  q = my_q
+)
+
+quantiles_MLE_graphs <- sapply(
+  1:my_T,
+  function(time) quantile(my_filter_graphs[[time]], probs = c(0.025, 0.975), na.rm = TRUE)
+)
+
+my_data_filter_graphs <- lapply(
+  1:my_T,
+  function(time) data.frame(data = my_filter_graphs[[time]], type = rep("filter", MCrep), time = (time - 1) * my_t)
+)
+my_data_filter_graphs <- do.call("rbind", my_data_filter_graphs)
+my_data_filter_graphs$time <- as.factor(my_data_filter_graphs$time)
+
+my_quantiles_filter_graphs <- data.frame(
+  lower = quantiles_MLE_graphs[1, ],
+  upper = quantiles_MLE_graphs[2, ],
+  time = as.factor(seq(from = 0, length.out = my_steps + 1, by = my_t))
+)
+```
+
+The chunk below produces the main visualization of the filtering results. For each time point, we display the Monte Carlo draws from the filtering distribution of **heterozygosity** (computed in the previous chunk) as a violin plot. On top of these violins, we overlay the observed heterozygosity time series (line and points) and mark the corresponding 95% credible bounds from the filter (triangles at the 2.5% and 97.5% quantiles).
+```{r FILTERING PLOTS INFECTIOUS, fig.width=16, fig.height=7}
+my_labels_graphs <- names(Y_graphs)
+
+my_plot_filter_graphs <-
+  ggplot() +
+  geom_violin(data = my_data_filter_graphs, aes(y = data, x = time), bw = 0.01, fill = "orchid1", colour = "orchid1", alpha = .66, scale = "width") +
+  geom_line(data = entropy_graphs, aes(y = data, x = time, group = 1), linewidth = 1, color = "blue") +
+  geom_point(data = entropy_graphs, aes(y = data, x = time, shape = type), size = 4, fill = "white", color = "black", shape = 23) +
+  geom_point(data = my_quantiles_filter_graphs, aes(y = upper, x = time), shape = 25, fill = "blue", color = "white", size = 4) +
+  geom_point(data = my_quantiles_filter_graphs, aes(y = lower, x = time), shape = 24, fill = "blue", color = "white", size = 4) +
+  ylim(c(0, 1)) +
+  scale_x_discrete(labels = my_labels_graphs) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), text = element_text(size = 20)) +
+  xlab("Time") +
+  ylab("Heterozygosity")
+
+print(my_plot_filter_graphs)
+```
+
+## Dual smoothing with ML-estimated parameters
+
+We now run the dual smoothing procedure at the previously obtained ML estimates \((\hat\alpha,\hat\theta)\). While filtering targets the distribution of the latent state given observations up to the current time, smoothing conditions on the entire observation sequence and returns a posterior distribution for each time point given all data (see the main text for details).
+
+As in the filtering step, we summarize the output in terms of heterozygosity (\(q\)-entropy with \(q=2\)), storing Monte Carlo draws from the smoothing distributions (for later violin plots) and computing pointwise 95% credible bounds (2.5% and 97.5% quantiles).
+
+**Expected runtime:** typically under 4 minutes, depending on hardware and Monte Carlo settings.
+```{r SMOOTHING INFECTIOUS, message=FALSE}
+MCrep <- 10^4
+MCparticles <- 10^5
+my_pruning_update <- 10
+my_pruning_propagation <- 10
+my_q <- 2
+
+my_smooth_graphs <- Smoothing_qentropy(
+  Y_graphs,
+  alpha = as.numeric(my_MLEs_graphs[1]),
+  theta = as.numeric(my_MLEs_graphs[2]),
+  t = my_t,
+  epsilon = my_epsilon,
+  pruning_update = 10,
+  pruning_propagation = 10,
+  N = MCrep,
+  nParticles = MCparticles,
+  show_top = Inf,
+  verbose = FALSE,
+  q = my_q
+)[[2]]
+
+quantiles_MLE_graphs_smooth <- sapply(
+  1:my_T,
+  function(time) quantile(my_smooth_graphs[[time]], probs = c(0.025, 0.975), na.rm = TRUE)
+)
+
+my_data_smooth_graphs <- lapply(
+  1:my_T,
+  function(time) data.frame(data = my_smooth_graphs[[time]], type = rep("smooth", MCrep), time = (time - 1) * my_t)
+)
+my_data_smooth_graphs <- do.call("rbind", my_data_smooth_graphs)
+my_data_smooth_graphs$time <- as.factor(my_data_smooth_graphs$time)
+
+my_quantiles_smooth_graphs <- data.frame(
+  lower = quantiles_MLE_graphs_smooth[1, ],
+  upper = quantiles_MLE_graphs_smooth[2, ],
+  time = as.factor(seq(from = 0, length.out = my_steps + 1, by = my_t))
+)
+```
+
+The chunk below visualizes the smoothing results. For each time point, we display the Monte Carlo draws from the **smoothing distribution** of heterozygosity as a violin plot. We overlay the observed heterozygosity time series (line and points) and indicate the corresponding 95% credible bounds from the smoother (triangles at the 2.5% and 97.5% quantiles).
+```{r SMOOTHING PLOTS INFECTIOUS, fig.width=16, fig.height=7}
+my_plot_smooth_graphs <-
+  ggplot() +
+  geom_violin(data = my_data_smooth_graphs, aes(y = data, x = time), bw = 0.01, fill = "orange", colour = "orange", alpha = .66, scale = "width") +
+  geom_line(data = entropy_graphs, aes(y = data, x = time, group = 1), linewidth = 1, color = "red") +
+  geom_point(data = entropy_graphs, aes(y = data, x = time, shape = type), size = 4, fill = "white", color = "black", shape = 23) +
+  geom_point(data = my_quantiles_smooth_graphs, aes(y = upper, x = time), shape = 25, fill = "red", color = "white", size = 4) +
+  geom_point(data = my_quantiles_smooth_graphs, aes(y = lower, x = time), shape = 24, fill = "red", color = "white", size = 4) +
+  ylim(c(0, 1)) +
+  scale_x_discrete(labels = my_labels_graphs) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), text = element_text(size = 20)) +
+  xlab("Time") +
+  ylab("Heterozygosity")
+
+print(my_plot_smooth_graphs)
+```
+
+## Bootstrap particle filter benchmark
+
+In addition to the dual particle filter used throughout the paper, we also implement a **bootstrap particle filter** as a computational benchmark (see the main text for motivation and methodological details). The procedure is run at the ML estimates \((\hat\alpha,\hat\theta)\) obtained above and targets the same time-indexed posterior summaries, here reported in terms of heterozygosity.
+
+Because the bootstrap filter propagates and reweights a large number of particles directly in the latent state space, it is substantially more computationally demanding than the dual approach. The chunk below runs the bootstrap filter, computes weighted 95% credible bounds (2.5% and 97.5% quantiles using the importance weights), and stores the particle values and weights for downstream visualizations.
+
+**Expected runtime:** approximately **1 hour** (highly dependent on hardware and the number of particles).
+
+We recommend importing the precomputed BPF simulation output generated previously.
+
+```{r}
+my_data_filter_bootstrap_graphs <- read.csv(cached_results_path("my_data_filter_bootstrap_graphs.csv"))
+my_data_filter_bootstrap_graphs$time <- as.factor(my_data_filter_bootstrap_graphs$time)
+my_quantiles_filter_bootstrap_graphs <- read.csv(cached_results_path("my_quantiles_filter_bootstrap_graphs.csv"))
+my_quantiles_filter_bootstrap_graphs$time <- as.factor(my_quantiles_filter_bootstrap_graphs$time)
+```
+
+Alternatively, you can set `if (FALSE)` to `if (TRUE)` in the chuncks below and run the simulation to regenerate the results, possibly adjusting some parameters within the computational constraints of the BPF.
+
+Replace with `if (TRUE)` to run the BPF
+```{r BOOTSTRAP INFECTIOUS}
+if (FALSE) {
+my_steps <- length(Y_graphs) - 1
+my_T <- my_steps + 1
+my_t <- 0.1
+my_epsilon <- 0.005
+MCrep <- 10^4 #Warning: bootstrap particle filter is computationally demanding
+my_alpha <- as.numeric(my_MLEs_graphs[1])
+my_theta <- as.numeric(my_MLEs_graphs[2])
+my_q <- 2
+
+message('------> MLEs: alpha=', as.numeric(my_MLEs_graphs[1]), ', theta=', as.numeric(my_MLEs_graphs[2]), ' <-------')
+
+my_filter_bootstrap_graphs <- Bootstrap_filter_King_qentropy(Y_graphs, alpha = my_alpha, theta = my_theta, delta = my_t, epsilon = my_epsilon, nParticles = MCrep, q = my_q )
+
+my_data_filter_bootstrap_graphs <- lapply(1:my_T, function(time) data.frame( 'data' = my_filter_bootstrap_graphs$Filter[[time]], 'importance' = my_filter_bootstrap_graphs$Importance_weights[[time]], 'type' = rep('bootstrap', MCparticles), 'time' = (time-1)*my_t ) )
+my_data_filter_bootstrap_graphs <- do.call('rbind', my_data_filter_bootstrap_graphs)
+my_data_filter_bootstrap_graphs$time <- as.factor(my_data_filter_bootstrap_graphs$time)
+
+system("say Stop")
+}
+```
+
+Compute the quantiles: replace with `if (TRUE)` if the BPF has been run
+```{r}
+if (FALSE) {
+my_quantiles_bootstrap <- matrix(NA, nrow = 2, ncol = my_steps+1)
+
+for(t in 1:my_T ){
+  temp_order <- order(my_filter_bootstrap_graphs$Filter[[t]], decreasing = FALSE)
+  temp_quantiles <- findInterval(x = c(0.025, 0.975), vec = cumsum( my_filter_bootstrap_graphs$Importance_weights[[t]][temp_order] ))
+  if (temp_quantiles[1] == 0) temp_quantiles[1] <- 1 #if smallest particle has a weight larger than 0.025
+  my_quantiles_bootstrap[,t] <- my_filter_bootstrap_graphs$Filter[[t]][temp_order][temp_quantiles]
+}
+
+my_quantiles_filter_bootstrap_graphs <- data.frame('lower' = my_quantiles_bootstrap[1, ], 'upper' = my_quantiles_bootstrap[2,], 'time' = as.factor( seq(from = 0, length.out = my_steps+1 , by = my_t) ) )
+}
+```
+
+Save data of BPF
+```{r}
+if (FALSE) {
+  write.csv(my_data_filter_bootstrap_graphs, file = "results/cached/my_data_filter_bootstrap_graphs.csv", row.names = FALSE)
+  write.csv(my_quantiles_filter_bootstrap_graphs, file = "results/cached/my_quantiles_filter_bootstrap_graphs.csv", row.names = FALSE)
+}
+```
+
+The chunk below visualizes the bootstrap particle filter output. For each time point, we display the particle approximation of the heterozygosity distribution as a violin plot, and we overlay the observed heterozygosity time series. The corresponding 95% credible bounds are computed using the importance weights (as in the previous chunk) and are shown with triangular markers.
+
+```{r BOOTSTRAP PLOTS x GRAPHS, fig.width=16, fig.height=7}
+my_plot_filter_bootstrap_graphs <-
+  ggplot() +
+  geom_violin(data = my_data_filter_bootstrap_graphs, aes(y = data, x = time, weight = importance), bw = 0.01, fill = "hotpink", colour = "hotpink", alpha = .5, scale = "width") +
+  geom_line(data = entropy_graphs, aes(y = data, x = time, group = 1), linewidth = 1, color = "purple") +
+  geom_point(data = entropy_graphs, aes(y = data, x = time, shape = type), size = 4, fill = "white", color = "black", shape = 23) +
+  geom_point(data = my_quantiles_filter_bootstrap_graphs, aes(y = upper, x = time), shape = 25, fill = "purple", color = "white", size = 4) +
+  geom_point(data = my_quantiles_filter_bootstrap_graphs, aes(y = lower, x = time), shape = 24, fill = "purple", color = "white", size = 4) +
+  ylim(c(0, 1)) +
+  scale_x_discrete(labels = my_labels_graphs) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), text = element_text(size = 20)) +
+  xlab("Time") +
+  ylab("Heterozygosity")
+
+print(my_plot_filter_bootstrap_graphs)
+```
+
+## Baseline with independent priors
+
+As a simple baseline, we also consider a misspecified model in which the latent states at different times are treated as a priori **independent**, i.e. no temporal dependence is assumed. This approach is computationally fast, but it is not theoretically appropriate for time-indexed data such as these, since it ignores the dynamic structure discussed in the main text. We include it here only for comparison.
+
+The procedure is organized into three steps:
+
+1. **Time-by-time maximum likelihood.** We estimate \(\alpha\) and \(\theta\) separately at each time point, by maximizing the likelihood using only the observation at that time (i.e. each time point is treated as an independent dataset).
+
+2. **Independent posterior sampling.** For each time point, we then sample from the Poisson–Dirichlet distribution posterior conditional on the corresponding observed partition, using the time-specific ML estimates \((\hat\alpha_t,\hat\theta_t)\). For each posterior draw we compute and store the associated heterozygosity (\(q\)-entropy with \(q=2\)).
+
+3. **Visualization.** Finally, we summarize the resulting (time-by-time) posterior distributions of heterozygosity with violin plots, overlaid with the observed heterozygosity curve, analogously to the filtering/smoothing figures.
+
+Although this baseline is extremely fast to run, it should be interpreted with caution: it provides a static, time-decoupled fit and therefore does not represent a coherent dynamic model for the data.
+
+```{r MLE INDEPENDENT PRIORS INFECTIOUS}
+min_alpha <- 0
+max_alpha <- 0.5
+min_theta <- 0
+max_theta <- 5
+grid_alpha <- seq(min_alpha, max_alpha, by = 0.005)
+grid_theta <- seq(min_theta, max_theta, by = 0.05)
+my_grid <- expand.grid(alpha = grid_alpha, theta = grid_theta)
+my_grid <- my_grid[-1, ]
+my_MLEs_ind <- matrix(0, nrow = my_T, ncol = 2)
+
+for (time in 1:my_T) {
+  temp_grid <- my_grid
+  temp_grid$psf <- apply(temp_grid, 1, function(el) PSF(el[1], el[2], Y_graphs[[time]], normalized = FALSE))
+  temp_MLE <- my_grid[which.max(temp_grid$psf), ]
+  my_MLEs_ind[time, 1] <- temp_MLE$alpha
+  my_MLEs_ind[time, 2] <- temp_MLE$theta
+}
+```
+
+```{r INDEPENDENT PRIORS INFECTIOUS}
+MCrep <- 10^4
+my_q <- 2
+
+my_independent_graphs <- lapply(
+  1:my_T,
+  function(time) {
+    sapply(
+      1:MCrep,
+      function(i) qentropy(pd_posterior(alpha = my_MLEs_ind[time, 1], theta = my_MLEs_ind[time, 2], partition = Y_graphs[[time]], epsilon = my_epsilon)$weights, q = my_q)
+    )
+  }
+)
+
+quantiles_independent_graphs <- sapply(
+  1:my_T,
+  function(time) quantile(my_independent_graphs[[time]], probs = c(0.025, 0.975), na.rm = TRUE)
+)
+
+my_data_independent_graphs <- lapply(
+  1:my_T,
+  function(time) data.frame(data = my_independent_graphs[[time]], type = rep("independent", MCrep), time = (time - 1) * my_t)
+)
+my_data_independent_graphs <- do.call("rbind", my_data_independent_graphs)
+my_data_independent_graphs$time <- as.factor(my_data_independent_graphs$time)
+
+my_quantiles_independent_graphs <- data.frame(
+  lower = quantiles_independent_graphs[1, ],
+  upper = quantiles_independent_graphs[2, ],
+  time = as.factor(seq(from = 0, length.out = my_steps + 1, by = my_t))
+)
+```
+
+```{r PLOT INDEPENDENT PRIORS INFECTIOUS, fig.width=16, fig.height=7}
+my_plot_independent_graphs <-
+  ggplot() +
+  geom_violin(data = my_data_independent_graphs, aes(y = data, x = time), bw = 0.01, fill = "gray", colour = "gray", alpha = .66, scale = "width") +
+  geom_line(data = entropy_graphs, aes(y = data, x = time, group = 1), linewidth = 1, color = "black") +
+  geom_point(data = entropy_graphs, aes(y = data, x = time, shape = type), size = 4, fill = "white", color = "black", shape = 23) +
+  geom_point(data = my_quantiles_independent_graphs, aes(y = upper, x = time), shape = 25, fill = "black", color = "white", size = 4) +
+  geom_point(data = my_quantiles_independent_graphs, aes(y = lower, x = time), shape = 24, fill = "black", color = "white", size = 4) +
+  ylim(c(0, 1)) +
+  scale_x_discrete(labels = my_labels_graphs) +
+  theme_minimal() +
+  theme(legend.title = element_blank(), text = element_text(size = 20)) +
+  xlab("Time") +
+  ylab("Heterozygosity")
+
+print(my_plot_independent_graphs)
+```
+
+## A known failure mode of the bootstrap particle filter
+
+This reproduces figure SM.4 in section SM.4.3 of the supplement.
+
+In the final chunk we focus on the 5th time point, *12h ≤ 30m*, and compare the filtering distribution of heterozygosity obtained with the dual particle filter and with the bootstrap particle filter (BPF).
+
+This comparison highlights a well-known issue of the BPF: when the new observation is substantially different from the recent past, the bootstrap proposal (which is driven mainly by propagation from the previous filtering distribution) can lead to severe weight degeneracy. As a consequence, the resulting particle approximation at the current time may become highly irregular and can exhibit spurious multimodality.
+
+By contrast, the dual filter does not suffer from this pathology in the same way in our setting, and typically produces a smoother, more stable representation of the filtering distribution even in the presence of abrupt changes in the data.
+
+The plot below shows kernel density estimates of the two filtering distributions at time 5, with the observed heterozygosity at that time marked by a dashed vertical line.
+
+```{r COMPARISON BETWEEN DUAL FILTER AND BPF AT TIME 5}
+temp <- my_data_filter_graphs[my_data_filter_graphs$time == 0.4, ]
+temp <- data.frame(data = temp$data, importance = rep(1, MCrep), type = temp$type, time = temp$time)
+dual_vs_bootstrap <- rbind(temp, my_data_filter_bootstrap_graphs[my_data_filter_bootstrap_graphs$time == 0.4, ])
+my_bw <- 0.01
+
+p <- ggplot(dual_vs_bootstrap, aes(x = data, weight = importance, fill = type)) +
+  geom_density(bw = my_bw, alpha = 0.75) +
+  scale_fill_manual(values = c("hotpink", "orchid1")) +
+  geom_vline(data = entropy_graphs[5, ], aes(xintercept = data), linetype = "dashed") +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.position = "none", text = element_text(size = 15)) +
+  xlab("Heterozygosity") +
+  ylab("Density") +
+  xlim(0, 1) +
+  ylim(0, 12.5)
+
+plot(p)
+```

@@ -1,0 +1,367 @@
+---
+title: "Simulation study"
+output:
+  html_document:
+    df_print: paged
+---
+
+This notebook reproduces the simulation study used in the manuscript. It includes the signal simulation, the dual filter and smoother on synthetic data, the bootstrap benchmark on synthetic data, and the coordinate plots used in the supplement.
+
+```{r setup, include=FALSE}
+library(here)
+here::i_am("notebooks/simulation_study.Rmd")
+source(here("R", "pdhmm_setup.R"))
+check_required_packages()
+source(here("R", "pdhmm_reusable.R"))
+```
+
+# Simulated signal and observations
+
+The following chunks reproduce Figure 8 in Section 4.4 of the main text.
+
+In this section we generate a synthetic dataset from the model used in the paper. First, we simulate a single path of the **two-parameter Poisson–Dirichlet diffusion** (Petrov’s diffusion) with parameters \(\alpha\) and \(\theta\). This produces, at each discrete time point, a random mass partition \(\mathbf{X}(t)\) representing the (latent) ranked population frequencies.
+
+Conditionally on the simulated diffusion path, we then generate an observed **integer partition** at each time by sampling \(n=50\) individuals from the corresponding **paintbox**, and recording the resulting cluster-size vector. These observed partitions (stored in `Y`) mimic the type of partition-valued data analyzed in the empirical section.
+
+We additionally compute and plot the associated **heterozygosity** summary, comparing the latent true heterozygosity along the diffusion path with the empirical entropy computed from the sampled partitions.
+
+**Parameter settings used in this simulation:** \(\alpha=0.1\), \(\theta=1.5\); number of steps `my_steps = 19` (so `my_T = 20` time points); time increment `my_t = 0.025`; discretization parameter `my_epsilon = 0.005`; sample size per time point `n = 50`; and the RNG seed 223 is fixed for reproducibility.
+
+```{r Signal simulation, message=FALSE}
+set.seed(223)
+
+my_alpha <- c(0.1)
+my_theta <- c(1.5)
+my_steps <- 19
+my_T <- my_steps + 1
+my_t <- 0.025
+my_epsilon <- 0.005
+my_runs <- 1
+obs <- c(rep(50, my_runs))
+show_top <- 3
+my_q <- 2
+
+my_alpha_theta_labels <- sapply(1:length(my_alpha), function(i) paste0(toString(my_alpha[i]), ", ", toString(my_theta[i])))
+
+true_entropy2 <- matrix(0, nrow = length(my_alpha), ncol = my_T)
+rownames(true_entropy2) <- my_alpha_theta_labels
+
+true_top <- vector(mode = "list", length = length(my_alpha))
+Y <- vector(mode = "list", length = length(my_alpha))
+
+for (i in 1:length(my_alpha)) {
+  signal <- Petrov(my_alpha[i], my_theta[i], my_steps, my_t, my_epsilon, N = obs, show_top = Inf)
+  true_entropy2[i, ] <- sapply(signal, function(el) qentropy(el$x / sum(el$x), q = my_q))
+  true_top[[i]] <- sapply(signal, function(el) el$x[1:show_top])
+  Y[[i]] <- lapply(signal, function(x) x$gamma[[1]])
+}
+
+if (length(Y) == 1) Y <- Y[[1]]
+```
+
+# Maximum marginal likelihood estimation
+
+We now estimate \(\alpha\) and \(\theta\) via **maximum marginal likelihood**, using a **grid search**. As explained in Section 4.3 of the main text, the (log-)marginal likelihood of the observations can be obtained as a byproduct of the dual filtering recursion.
+
+Concretely, for each candidate pair \((\alpha,\theta)\) on a predefined grid, we run the dual particle filter *only to evaluate the marginal likelihood* (i.e., without generating Monte Carlo samples from the filtering distributions). We store the resulting log-likelihood value for each grid point, and select as ML estimate the pair \((\hat\alpha,\hat\theta)\) that achieves the largest log-likelihood.
+
+**Expected runtime:** under 30 minutes, depending on hardware and the grid resolution.
+
+The expensive grid-search chunk is kept but disabled by default. The value used in the manuscript is set immediately afterwards.
+
+Replace with `if (TRUE)` to run the ML estimation of \(\alpha\) and \(\theta\).
+```{r MMLE simulation}
+if (FALSE) {
+  min_alpha <- 0
+  max_alpha <- 0.2
+  min_theta <- 0.75
+  max_theta <- 2.25
+  grid_alpha <- seq(min_alpha, max_alpha, by = 0.05)
+  grid_theta <- seq(min_theta, max_theta, by = .25)
+  my_grid <- expand.grid(alpha = grid_alpha, theta = grid_theta)
+  my_grid <- my_grid[-1, ]
+  temp <- my_grid
+  temp$psf <- pbapply(
+    my_grid, 1,
+    function(el) sum(log(Particle_filter_likelihood(Y, alpha = el[1], theta = el[2], t = my_t, pruning_update = 0, pruning_propagation = 10, N = 0, nParticles = 10^4, store_mixture = FALSE)))
+  )
+  my_MLEs <- temp[which.max(temp$psf), ]
+  my_MLEs
+}
+```
+
+Set manually \(\alpha\) and \(\theta\).
+Replace with `if (FALSE)` if chunk above has been executed.
+```{r}
+if (TRUE) {
+  my_MLEs <- matrix(c(0, 1.5), ncol = 2, nrow = 1)
+}
+```
+
+# Dual filtering and smoothing at the ML estimates
+
+Having obtained the ML estimates \((\hat\alpha,\hat\theta)\), we now run the dual particle filter and the dual smoother using these parameter values (as described in the main text). As before, the procedures return time-indexed posterior distributions, which we summarize through the heterozygosity statistics and store for downstream plots.
+
+**Expected runtime (filter):** typically under 1 minute.
+
+**Expected runtime (smoother):** typically under 8 minutes, depending on hardware and Monte Carlo settings.
+```{r Filter and smoother simulation, message=FALSE}
+my_epsilon <- 0.005
+MCrep <- 10^4
+MCparticles <- 10^4
+my_pruning_propagation <- 10
+
+Y_ts2 <- sapply(Y, function(el) qentropy(el / sum(el), q = 2))
+Y_ts2 <- data.frame(data = Y_ts2, type = as.factor("Observed entropy"), time = as.factor(seq(from = 0, length.out = my_steps + 1, by = my_t)))
+
+my_true_top2 <- data.frame(data = as.numeric(true_entropy2), type = as.factor("Signal entropy"), time = as.factor(seq(from = 0, length.out = my_steps + 1, by = my_t)))
+my_true_top_and_Y2 <- rbind(my_true_top2, Y_ts2)
+
+my_filter2 <- Particle_filter_qentropy(Y, alpha = my_MLEs[1, 1], theta = my_MLEs[1, 2], t = my_t, epsilon = my_epsilon, pruning_update = 0, pruning_propagation = my_pruning_propagation, N = MCrep, nParticles = MCparticles, show_top = Inf, verbose = FALSE, q = 2)
+quantiles_MLE_filter2 <- sapply(1:my_T, function(t) quantile(my_filter2[[t]], probs = c(0.025, 0.975), na.rm = TRUE))
+my_data_filter2 <- lapply(1:my_T, function(t) data.frame(data = my_filter2[[t]], type = rep("filter", MCrep), time = (t - 1) * my_t))
+my_data_filter2 <- do.call("rbind", my_data_filter2)
+my_data_filter2$time <- as.factor(my_data_filter2$time)
+my_quantiles_filter2 <- data.frame(lower = quantiles_MLE_filter2[1, ], upper = quantiles_MLE_filter2[2, ], time = as.factor(seq(from = 0, length.out = my_steps + 1, by = my_t)))
+
+my_smooth2 <- Smoothing_qentropy(Y, alpha = my_MLEs[1, 1], theta = my_MLEs[1, 2], t = my_t, epsilon = my_epsilon, pruning_update = 10, pruning_propagation = my_pruning_propagation, N = MCrep, nParticles = MCparticles, show_top = Inf, verbose = FALSE, q = 2)[[2]]
+quantiles_MLE_smooth2 <- sapply(1:my_T, function(t) quantile(my_smooth2[[t]], probs = c(0.025, 0.975), na.rm = TRUE))
+my_data_smooth2 <- lapply(1:my_T, function(t) data.frame(data = my_smooth2[[t]], type = rep("smooth", MCrep), time = (t - 1) * my_t))
+my_data_smooth2 <- do.call("rbind", my_data_smooth2)
+my_data_smooth2$time <- as.factor(my_data_smooth2$time)
+my_quantiles_smooth2 <- data.frame(lower = quantiles_MLE_smooth2[1, ], upper = quantiles_MLE_smooth2[2, ], time = as.factor(seq(from = 0, length.out = my_steps + 1, by = my_t)))
+```
+
+The chunk below visualizes the output of the dual filter and the dual smoother in terms of heterozygosity. For each time point, violin plots summarize the Monte Carlo draws from the corresponding filtering and smoothing distributions.
+
+We overlay two reference trajectories:
+- the true heterozygosity of the simulated diffusion path (solid black line with black dots);
+- the empirical heterozygosity computed from the simulated observed partitions (white diamonds).
+
+This plot therefore shows how the filtering and smoothing posteriors track the underlying latent signal, while accounting for sampling variability in the observations.
+
+```{r Plots filter smoother simulation}
+my_time_string_long <- lapply(1:my_steps, function(i) rep(toString(i * my_t), MCrep))
+my_time_string_long <- unlist(my_time_string_long)
+my_time_string_long <- factor(c(rep("0", MCrep), sub(".", "", my_time_string_long)), levels = c("0", ".025", ".05", ".075", ".1", ".125", ".15", ".175", ".2", ".225", ".25", ".275", ".3", ".325", ".35", ".375", ".4", ".425", ".45", ".475"))
+
+my_time_string_short <- sapply(1:my_steps, function(i) rep(toString(i * my_t), 1))
+my_time_string_short <- factor(c("0", sub(".", "", my_time_string_short)), levels = c("0", ".025", ".05", ".075", ".1", ".125", ".15", ".175", ".2", ".225", ".25", ".275", ".3", ".325", ".35", ".375", ".4", ".425", ".45", ".475"))
+
+my_data_filter2$time <- my_time_string_long
+my_data_smooth2$time <- my_time_string_long
+my_quantiles_filter2$time <- my_time_string_short
+my_quantiles_smooth2$time <- my_time_string_short
+my_true_top2$time <- my_time_string_short
+my_true_top_and_Y2$time <- c(my_time_string_short, my_time_string_short)
+
+my_plot_filter2 <-
+  ggplot() +
+  geom_violin(data = my_data_filter2, aes(y = data, x = time), bw = 0.01, fill = "orchid1", colour = "orchid1", alpha = .66, scale = "count") +
+  geom_line(data = my_quantiles_filter2, aes(y = upper, x = time, group = 1), linetype = "dashed", colour = "blue", linewidth = 1) +
+  geom_line(data = my_quantiles_filter2, aes(y = lower, x = time, group = 1), linetype = "dashed", colour = "blue", linewidth = 1) +
+  geom_line(data = my_true_top2, aes(y = data, x = time, group = 1), linewidth = 1) +
+  geom_point(data = my_true_top_and_Y2, aes(y = data, x = time, shape = type, fill = type), size = 4, color = "black", show.legend = FALSE) +
+  ylim(c(0, 1)) +
+  scale_shape_manual(values = c(21, 23)) +
+  scale_fill_manual(values = c("black", "white")) +
+  theme_minimal() +
+  labs(x = "Time", y = "Heterozygosity")
+
+my_plot_smooth2 <-
+  ggplot() +
+  geom_violin(data = my_data_smooth2, aes(y = data, x = time), bw = 0.01, fill = "orange", colour = "orange", alpha = .66, scale = "count") +
+  geom_line(data = my_quantiles_smooth2, aes(y = upper, x = time, group = 1), linetype = "dashed", colour = "red", linewidth = 1) +
+  geom_line(data = my_quantiles_smooth2, aes(y = lower, x = time, group = 1), linetype = "dashed", colour = "red", linewidth = 1) +
+  geom_line(data = my_true_top2, aes(y = data, x = time, group = 1), linewidth = 1) +
+  geom_point(data = my_true_top_and_Y2, aes(y = data, x = time, shape = type, fill = type), size = 4, color = "black", show.legend = FALSE) +
+  ylim(c(0, 1)) +
+  scale_shape_manual(values = c(21, 23)) +
+  scale_fill_manual(values = c("black", "white")) +
+  theme_minimal() +
+  labs(x = "Time", y = "Heterozygosity")
+
+print(my_plot_filter2)
+print(my_plot_smooth2)
+```
+
+# Coordinate plots from cached supplementary outputs
+
+The following chunks reproduce Figure SM.3 in Section SM.4.3 of the supplement.
+
+These show the filtering and smoothing distributions of the 3 coordinates of the latent diffusion path (which is infinite-dimensional).
+
+The next chunk reads the cached coordinate summaries bundled with the submission and reproduces the corresponding supplementary plots.
+
+```{r}
+show_top <- 3
+for (j in 1:show_top) {
+  my_data_filter_coord <- read.csv(cached_results_path(paste0("my_data_filter_coord", j, ".csv")))
+  my_data_filter_coord$time <- as.factor(my_data_filter_coord$time)
+
+  my_data_smoothing_coord <- read.csv(cached_results_path(paste0("my_data_smoothing_coord", j, ".csv")))
+  my_data_smoothing_coord$time <- as.factor(my_data_smoothing_coord$time)
+
+  my_true_top_coord <- read.csv(cached_results_path(paste0("my_true_top_coord", j, ".csv")))
+  my_true_top_coord$time <- as.factor(my_true_top_coord$time)
+  my_true_top_coord$type <- as.factor(my_true_top_coord$type)
+
+  my_true_top_and_Y_coord <- read.csv(cached_results_path(paste0("my_true_top_and_Y_coord", j, ".csv")))
+  my_true_top_and_Y_coord$time <- as.factor(my_true_top_and_Y_coord$time)
+  my_true_top_and_Y_coord$type <- as.factor(my_true_top_and_Y_coord$type)
+
+  my_quantiles_filter_coord <- read.csv(cached_results_path(paste0("my_quantiles_filter_coord", j, ".csv")))
+  my_quantiles_filter_coord$time <- as.factor(my_quantiles_filter_coord$time)
+
+  my_quantiles_smoothing_coord <- read.csv(cached_results_path(paste0("my_quantiles_smoothing_coord", j, ".csv")))
+  my_quantiles_smoothing_coord$time <- as.factor(my_quantiles_smoothing_coord$time)
+
+  my_plot_filter_coord <-
+    ggplot() +
+    geom_violin(data = my_data_filter_coord, aes(y = data, x = time), bw = 0.01, fill = "orchid1", colour = "orchid1", alpha = 1, scale = "count") +
+    geom_line(data = my_quantiles_filter_coord, aes(y = upper, x = time, group = 1), linetype = "dashed", colour = "blue", linewidth = 1) +
+    geom_line(data = my_quantiles_filter_coord, aes(y = lower, x = time, group = 1), linetype = "dashed", colour = "blue", linewidth = 1) +
+    geom_line(data = my_true_top_coord, aes(y = data, x = time, group = 1), linewidth = 1) +
+    geom_point(data = my_true_top_and_Y_coord, aes(y = data, x = time, shape = type, fill = type), size = 2.5, show.legend = FALSE) +
+    scale_fill_manual(values = c("white", "black")) +
+    scale_shape_manual(values = c(23, 21)) +
+    theme_minimal() +
+    ylim(0, 1 / j) +
+    labs(x = "Time", y = paste("Coordinate", j))
+
+  my_plot_smoothing_coord <-
+    ggplot() +
+    geom_violin(data = my_data_smoothing_coord, aes(y = data, x = time), bw = 0.01, fill = "orange", colour = "orange", alpha = 1, scale = "count") +
+    geom_line(data = my_quantiles_smoothing_coord, aes(y = upper, x = time, group = 1), linetype = "dashed", colour = "red", linewidth = 1) +
+    geom_line(data = my_quantiles_smoothing_coord, aes(y = lower, x = time, group = 1), linetype = "dashed", colour = "red", linewidth = 1) +
+    geom_line(data = my_true_top_coord, aes(y = data, x = time, group = 1), linewidth = 1) +
+    geom_point(data = my_true_top_and_Y_coord, aes(y = data, x = time, shape = type, fill = type), size = 2.5, color = "black", show.legend = FALSE) +
+    scale_fill_manual(values = c("white", "black")) +
+    scale_shape_manual(values = c(23, 21)) +
+    theme_minimal() +
+    ylim(0, 1 / j) +
+    labs(x = "Time", y = paste("Coordinate", j))
+
+  print(my_plot_filter_coord)
+  print(my_plot_smoothing_coord)
+}
+```
+
+Otherwise run the following chunks to re-run the simulations.
+**Expected runtime:** under 1 minute.
+```{r Filter x COORDINATES}
+if (FALSE) {
+show_top <- 3
+MCrep <- 10^4
+MCparticles <- 10^4
+
+my_filter_coord <- Particle_filter(Y, alpha = my_MLEs[1, 1], theta = my_MLEs[1, 2], t = my_t, epsilon = my_epsilon, pruning_update = 0, pruning_propagation = 10, N = MCrep, nParticles = MCparticles, show_top = show_top, verbose = FALSE, store_mixture_update = FALSE, store_mixture_propagation = FALSE )
+    
+# compute quantiles
+quantiles_filter_coord <- lapply( 1:show_top, function(j) sapply(1:my_T, function(t) quantile(my_filter_coord[[t]][,j], probs = c(0.025, 0.975), na.rm = T) ) )
+}
+```
+
+**Expected runtime:** under 8 minutes
+```{r Smoothing x COORDINATES}
+if (FALSE) {
+show_top <- 3
+MCrep <- 10^4
+MCparticles <- 10^4
+
+my_smoothing_coord <- Smoothing( Y, alpha = my_MLEs[1, 1], theta = my_MLEs[1, 2], my_t, my_epsilon, pruning_update = 10, pruning_propagation = 10, MCrep, MCparticles, show_top = show_top )[[2]]
+
+quantiles_smoothing_coord <- lapply( 1:show_top, function(j) sapply(1:my_T, function(t) quantile(my_smoothing_coord[[t]][,j], probs = c(0.025, 0.975), na.rm = T) ) )
+}
+```
+
+Save data and plot
+```{r Plots coordinates simulation}
+if (FALSE) {
+labs_x_title <- c('st', 'nd', 'rd', 'th', 'th')
+show_top <- 3
+
+for (j in 1:show_top) {
+  my_data_filter_coord <- lapply(1:(my_steps+1), function(t) data.frame( 'data' = my_filter_coord[[t]][, j], 'type' = rep('filter', MCrep), 'time' = (t-1)*my_t ) )
+  my_data_filter_coord <- do.call('rbind', my_data_filter_coord)
+  my_data_filter_coord$time <- as.factor(my_data_filter_coord$time)
+  
+  my_data_smoothing_coord <- lapply(1:(my_steps+1), function(t) data.frame( 'data' = my_smoothing_coord[[t]][, j], 'type' = rep('smoothing', MCrep), 'time' = (t-1)*my_t ) )
+  my_data_smoothing_coord <- do.call('rbind', my_data_smoothing_coord)
+  my_data_smoothing_coord$time <- as.factor(my_data_smoothing_coord$time)
+  write.csv(my_data_filter_coord, file = paste0("my_data_filter_coord", j, ".csv"), row.names = FALSE)
+  
+  Y_ts_coord <- sapply( 1:my_T, function(t) Y[[t]][j] / sum(Y[[t]]) )
+  Y_ts_coord[is.na(Y_ts_coord)] <- 0
+  Y_ts_coord <- data.frame('data' = Y_ts_coord, 'type' = as.factor('Data') , 'time' = as.factor( seq(from = 0, length.out = my_steps+1 , by = my_t) ) )
+  
+  my_true_top_coord <- data.frame('data' = true_top[[1]][j,], 'type' = as.factor('Signal'), 'time' = as.factor( seq(from = 0, length.out = my_steps+1 , by = my_t) ) )
+  
+  my_true_top_and_Y_coord <- rbind(my_true_top_coord, Y_ts_coord)
+  
+  my_quantiles_filter_coord <- data.frame('lower' = quantiles_filter_coord[[j]][1,], 'upper' = quantiles_filter_coord[[j]][2,], 'time' = as.factor( seq(from = 0, length.out = my_steps+1 , by = my_t) ) )
+  
+  my_quantiles_smoothing_coord <- data.frame('lower' = quantiles_smoothing_coord[[j]][1,], 'upper' = quantiles_smoothing_coord[[j]][2,], 'time' = as.factor( seq(from = 0, length.out = my_steps+1 , by = my_t) ) )
+  
+  { my_plot_filter_coord <-
+      ggplot( ) +
+      geom_violin(data = my_data_filter_coord, aes(y=data, x=time ), bw = 0.01, fill = 'orchid1', colour = 'orchid1', alpha=1, scale = 'count') +
+      geom_line(data = my_quantiles_filter_coord, aes(y = upper, x = time, group = 1), linetype = 'dashed', colour = 'blue', linewidth = 1, show.legend = FALSE) +
+      geom_line(data = my_quantiles_filter_coord, aes(y = lower, x = time, group = 1, colour = "95% credible intervals"), linetype = 'dashed', color = 'blue', linewidth = 1, show.legend = FALSE) +
+      geom_line(data = my_true_top_coord, aes(y = data, x = time, group = 1), linewidth = 1) +
+      geom_point(data = my_true_top_and_Y_coord, aes(y = data, x = time, shape = type, fill = type), size = 2.5, show.legend = FALSE) +
+      scale_color_manual(values = c('white', 'black')) +
+      scale_fill_manual(values = c('black', 'white')) +
+      scale_shape_manual(values = c(21, 23)) +
+      theme_minimal() +
+      theme(legend.title=element_blank(), text = element_text(size = 15)) +
+      xlab("") +
+      ylab("") +
+      ylim(0, 1/j) +
+      labs(
+        #title = "",
+        #subtitle = "",
+        #caption = "",
+        #x = "Time"
+      )
+  }
+  print(my_plot_filter_coord)
+  
+  { my_plot_smoothing_coord <-
+      ggplot( ) +
+      geom_violin(data = my_data_smoothing_coord, aes(y=data, x=time ), bw = 0.01, fill = 'orange', colour = 'orange', alpha=1, scale = 'count') +
+      geom_line(data = my_quantiles_smoothing_coord, aes(y = upper, x = time, group = 1), linetype = 'dashed', colour = 'red', linewidth = 1, show.legend = FALSE) +
+      geom_line(data = my_quantiles_smoothing_coord, aes(y = lower, x = time, group = 1, colour = "95% credible intervals"), color = 'red', linetype = 'dashed', linewidth = 1, show.legend = FALSE) +
+      geom_line(data = my_true_top_coord, aes(y = data, x = time, group = 1), linewidth = 1) +
+      geom_point(data = my_true_top_and_Y_coord, aes(y = data, x = time, shape = type, fill = type), size = 2.5, color = 'black', show.legend = FALSE) +
+      scale_fill_manual(values = c('black', 'white')) +
+      scale_shape_manual(values = c(21, 23)) +
+      theme_minimal() +
+      theme(legend.title=element_blank(), text = element_text(size = 15) ) +
+      xlab("") +
+      ylab("") +
+      ylim(0, 1/j) +
+      labs(
+        #title = "",
+        #subtitle = "",
+        #caption = "",
+        #x = "Time"
+      )
+  }
+  print(my_plot_smoothing_coord)
+  
+  #set if (TRUE) to save data
+  if (FALSE) {
+  write.csv(my_data_smoothing_coord, file = paste0("results/cached/my_data_smoothing_coord", j, ".csv"), row.names = FALSE)
+  
+  write.csv(my_true_top_coord, file = paste0("results/cached/my_true_top_coord", j, ".csv"), row.names = FALSE)
+  
+  write.csv(my_true_top_and_Y_coord, file = paste0("results/cached/my_true_top_and_Y_coord", j, ".csv"), row.names = FALSE)
+  
+  write.csv(my_quantiles_filter_coord, file = paste0("results/cached/my_quantiles_filter_coord", j, ".csv"), row.names = FALSE)
+  
+  write.csv(my_quantiles_smoothing_coord, file = paste0("results/cached/my_quantiles_smoothing_coord", j, ".csv"), row.names = FALSE)
+  }
+}
+}
+```

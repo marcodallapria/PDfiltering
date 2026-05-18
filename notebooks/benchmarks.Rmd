@@ -1,0 +1,146 @@
+---
+title: "Benchmarks and supplementary diagnostics"
+output:
+  html_document:
+    df_print: paged
+---
+
+This notebook reproduces the benchmark plots and supplementary diagnostics that rely primarily on cached outputs bundled with the submission.
+
+```{r setup, include=FALSE}
+library(here)
+here::i_am("notebooks/benchmarks.Rmd")
+source(here("R", "pdhmm_setup.R"))
+check_required_packages(c("here", "ggplot2"))
+library(ggplot2)
+```
+
+# Pruning sensitivity: runtime vs accuracy
+
+The next chunks reproduce Figure 7 in Section 4.2 of the main text.
+
+In the next two chunks we study the effect of **pruning** in the dual particle filter by running the algorithm under different pruning levels and comparing both execution time and accuracy as the pruning threshold changes.
+
+This experiment is computationally intensive, since it requires repeated runs of the filter across multiple parameter settings.
+For convenience, and to reproduce the figures reported in the paper without re-running the full experiment, we recommend importing the precomputed results stored in `times.csv` and `score.csv` and using them to generate the plots.
+
+```{r}
+my_labels <- c("    1 node", "  10 nodes", "100 nodes", "  90% mass", "  95% mass", "100% mass")
+
+my_times <- read.csv(cached_results_path("my_times.csv"))
+my_times$Pruning <- factor(my_times$Pruning, levels = my_labels, ordered = TRUE)
+
+my_scores <- read.csv(cached_results_path("my_scores.csv"))
+my_scores$Pruning <- factor(my_scores$Pruning, levels = my_labels, ordered = TRUE)
+```
+
+```{r PLOT RUNTIME and SCORE}
+my_plot_time <-
+  ggplot(data = my_times) +
+  geom_boxplot(aes(y = Time, color = Pruning), size = .5, show.legend = TRUE, outlier.size = 1) +
+  facet_grid(. ~ factor(Observations)) +
+  scale_y_continuous(transform = "log10", limits = c(10, 1000)) +
+  scale_x_continuous(breaks = NULL) +
+  scale_color_brewer(palette = "Dark2") +
+  theme_light() +
+  theme(strip.text = element_text(size = 15), text = element_text(size = 15)) +
+  labs(y = "log(Seconds)", x = "Partitions' norm")
+
+my_plot_scores <-
+  ggplot(data = my_scores) +
+  geom_boxplot(aes(y = Score, color = Pruning), lwd = .5, show.legend = TRUE, outlier.size = 1) +
+  facet_grid(. ~ factor(Observations)) +
+  scale_color_brewer(palette = "Dark2") +
+  scale_x_continuous(breaks = NULL) +
+  theme_light() +
+  theme(strip.text = element_text(size = 15), text = element_text(size = 15)) +
+  ylim(0, max(my_scores$Score)) +
+  labs(y = "Score", x = "Partitions' norm")
+
+my_plot_time
+my_plot_scores
+```
+
+# Comparing filtering and smoothing methods
+
+The next chunks reproduce Figure 9 in Section 4.4 of the main text.
+
+In the next chunks we compare the **accuracy** of the different filtering and smoothing approaches considered in the paper. These comparisons rely on extensive simulation runs and are therefore computationally expensive.
+
+To reproduce the corresponding figure in the manuscript without re-running the full simulation study, we recommend importing the precomputed simulation outputs and directly printing the results.
+
+```{r}
+my_data3 <- read.csv(cached_results_path("my_data3.csv"))
+```
+
+```{r PLOT x SCORE, fig.width=16, fig.height=7}
+my_plot3 <-
+  ggplot(data = my_data3, aes(y = Data, x = "", color = factor(Type))) +
+  geom_boxplot(outliers = TRUE, show.legend = FALSE, outlier.size = 1.5, coef = 1) +
+  geom_jitter(width = 0.2, size = 1.5, show.legend = FALSE) +
+  scale_x_discrete(breaks = NULL) +
+  ylim(0, 3) +
+  facet_grid(. ~ factor(Type, levels = c("Independent", "Bootstrap", "Filter", "Oracle Filter", "Smoother", "Oracle Smoother"))) +
+  scale_colour_manual(values = c("hotpink", "orchid1", "darkgray", "royalblue1", "tomato", "orange")) +
+  theme_light() +
+  theme(strip.text = element_text(size = 20), text = element_text(size = 20)) +
+  labs(y = "Score", x = "")
+
+my_plot3
+```
+
+# Proportion of filtering mixture components
+
+The following chunks return Figure SM.2 in Section SM.4.2 of the supplement.
+
+Here we investigate how the mixing measure concentrates on the coagulations indexing the (dual) filtering distribution -- a diagnostic on the concentration of the filtering mixture over the active coagulations
+The figures show that most of the mass is concentrated on a small subset of the coagulation, thereby justifying the use of the pruning strategy.
+
+```{r}
+size_top_update <- read.csv(cached_results_path("size_top_update.csv"))
+size_top_update$time <- as.factor(size_top_update$time)
+
+top_update_relative <- read.csv(cached_results_path("top_update_relative.csv"))
+top_update_relative$time <- as.factor(top_update_relative$time)
+
+size_top_propagation <- read.csv(cached_results_path("size_top_propagation.csv"))
+size_top_propagation$time <- as.factor(size_top_propagation$time)
+
+top_propagation_relative <- read.csv(cached_results_path("top_propagation_relative.csv"))
+top_propagation_relative$time <- as.factor(top_propagation_relative$time)
+```
+
+```{r}
+plot_update_size <-
+  ggplot(size_top_update, aes(x = time, y = data, colour = type, group = type)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(x = "Time", y = "", title = "Absolute values", subtitle = "Pruning after each update")
+
+plot_update_top <-
+  ggplot(top_update_relative, aes(x = time, y = data, colour = type, group = type)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(x = "Time", y = "", colour = "", title = "Relative values", subtitle = "Pruning after each update")
+
+plot_prop_size <-
+  ggplot(size_top_propagation, aes(x = time, y = data, colour = type, group = type)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(x = "Time", y = "", title = "Absolute values", subtitle = "Pruning after each propagation")
+
+plot_prop_top <-
+  ggplot(top_propagation_relative, aes(x = time, y = data, colour = type, group = type)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(x = "Time", y = "", colour = "", title = "Relative values", subtitle = "Pruning after each propagation")
+
+plot_update_size
+plot_update_top
+plot_prop_size
+plot_prop_top
+```
