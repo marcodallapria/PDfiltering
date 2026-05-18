@@ -128,7 +128,11 @@ The empirical analysis uses the Infectious SocioPatterns data:
 - dataset page: <https://sociopatterns.org/datasets/infectious-exhibition-dynamic-contact-networks/>
 - bundled file used in the manuscript: `data/raw/listcontacts_2009_06_28.txt`
 
-The SocioPatterns data are distributed under CC BY-NC-SA 3.0. The code in this archive is intended to be shared under the same terms stated in the submission materials.
+**Data license.** The SocioPatterns data are distributed under **CC BY-NC-SA 3.0**. Please acknowledge the SocioPatterns collaboration and cite:
+
+Isella, L., Stehlé, J., Barrat, A., Cattuto, C., Pinton, J.-F., and Van den Broeck, W. (2011). *What’s in a crowd? Analysis of face-to-face behavioral networks.* **Journal of Theoretical Biology**, 271(1), 166–180.
+
+**Code license.** The code in this repository is released under the **MIT License** (see `LICENSE`).
 
 ## Figure and output map
 
