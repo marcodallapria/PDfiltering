@@ -10,7 +10,11 @@
 # This script intentionally retains the same mathematical workflow as the
 # original `PDfiltering.Rmd`, but isolates it from the empirical analysis.
 
-source(here::here("analysis", "00_setup.R"))
+if (file.exists(here::here("analysis", "00_setup.R"))) {
+  source(here::here("analysis", "00_setup.R"))   
+} else {
+  source("00_setup.R")                           
+}
 
 set.seed(223)
 
