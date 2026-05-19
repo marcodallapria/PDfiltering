@@ -3,6 +3,7 @@
 # This script renders the section-level notebooks. The notebooks are
 # self-contained and therefore serve as the main full-workflow documents.
 
+here::i_am("run_all.R")
 source(here::here("R", "pdhmm_setup.R"))
 check_required_packages(c("here", "knitr", "rmarkdown"))
 ensure_output_directories()
