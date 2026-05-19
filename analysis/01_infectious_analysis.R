@@ -18,7 +18,11 @@
 # - about 10--20 minutes for the dual-filter and smoother computations;
 # - about 1 hour if the bootstrap particle filter is recomputed from scratch.
 
-source(here::here("analysis", "00_setup.R"))
+if (file.exists(here::here("analysis", "00_setup.R"))) {
+  source(here::here("analysis", "00_setup.R"))   
+} else {
+  source("00_setup.R")                           
+}
 
 day <- 28
 contact_file <- raw_data_path(sprintf("listcontacts_2009_06_%02d.txt", day))
