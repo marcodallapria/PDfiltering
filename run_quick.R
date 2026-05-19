@@ -4,6 +4,7 @@
 # split analysis scripts and prefers cached computational outputs where the
 # manuscript workflow is especially expensive.
 
+here::i_am("run_quick.R")
 source(here::here("analysis", "00_setup.R"))
 
 message("Running quick reproduction workflow")
