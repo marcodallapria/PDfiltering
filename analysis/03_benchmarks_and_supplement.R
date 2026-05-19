@@ -8,10 +8,11 @@
 # This script focuses on the supplementary material that relies on cached
 # `.csv` files bundled with the submission.
 
-source(here::here("R", "pdhmm_setup.R"))
-check_required_packages(c("here", "ggplot2"))
-ensure_output_directories()
-library(ggplot2)
+if (file.exists(here::here("analysis", "00_setup.R"))) {
+  source(here::here("analysis", "00_setup.R"))   
+} else {
+  source("00_setup.R")                           
+}
 
 labs_x_title <- c("st", "nd", "rd", "th", "th")
 show_top <- 3
