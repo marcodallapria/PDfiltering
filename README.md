@@ -1,6 +1,6 @@
 # Reproducibility materials for *Dalla Pria, Ruggiero, Spanò, “Exact inference via quasi-conjugacy in two-parameter Poisson–Dirichlet hidden Markov models”, JASA (forthcoming).*
 
-[Preprint (arXiv)](https://arxiv.org/abs/2512.22098) · [JASA](https://doi.org/10.1080/01621459.2026.2676717)
+[Preprint (arXiv)](https://arxiv.org/abs/2512.22098) · [JASA](https://www.tandfonline.com/doi/full/10.1080/01621459.2026.2676717)
 
 This directory contains the code, cached computational outputs, and supporting data needed to reproduce the numerical results in the manuscript and supplementary material.
 
